@@ -1,5 +1,3 @@
-use evdev::Device;
-
 fn main() {
     let mut devices = evdev::enumerate().collect::<Vec<_>>();
     devices.sort_by_key(|(p, _)| p.clone());

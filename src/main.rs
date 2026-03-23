@@ -5,23 +5,11 @@ use std::path::PathBuf;
 use x11_dl::xlib;
 
 fn main() -> eframe::Result {
-    println!("DEBUG: Tool launched!");
     let mut capturer = captrs::Capturer::new(0).expect("Failed to create capturer");
     let (width, height) = capturer.geometry();
     
-    // Try to capture
-    let image_data = match capturer.capture_frame() {
-        Ok(data) => {
-            println!("DEBUG: Capture SUCCESS");
-            data
-        },
-        Err(e) => {
-            eprintln!("DEBUG: Capture FAILED: {:?}", e);
-            // Wait 200ms and try again
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            capturer.capture_frame().expect("Capture failed twice")
-        }
-    };
+    // Prefer a few short retries over a single long fallback delay.
+    let image_data = capture_frame_with_retries(&mut capturer);
     
     let mut rgba_pixels = Vec::with_capacity((width * height * 4) as usize);
     for pixel in image_data {
@@ -38,10 +26,13 @@ fn main() -> eframe::Result {
     // so the selection overlay remains interactive without losing the captured menu frame.
     release_x11_grabs();
 
-    println!("TOOL: Launching UI window...");
+    let screen_size = [width as f32, height as f32];
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_fullscreen(true)
+            // Use fixed origin + explicit size to avoid WM fullscreen transition animations.
+            .with_position([0.0, 0.0])
+            .with_inner_size(screen_size)
+            .with_resizable(false)
             .with_always_on_top()
             .with_decorations(false)
             .with_active(true)
@@ -53,7 +44,6 @@ fn main() -> eframe::Result {
         "Screencap Rust",
         options,
         Box::new(move |cc| {
-            println!("TOOL: UI context created");
             let size = [width as usize, height as usize];
             let color_image = egui::ColorImage::from_rgba_unmultiplied(
                 size,
@@ -75,6 +65,26 @@ fn main() -> eframe::Result {
             }))
         }),
     )
+}
+
+fn capture_frame_with_retries(capturer: &mut captrs::Capturer) -> Vec<captrs::Bgr8> {
+    const MAX_RETRIES: usize = 6;
+    const RETRY_SLEEP_MS: u64 = 8;
+
+    let mut last_error: Option<captrs::CaptureError> = None;
+    for attempt in 0..=MAX_RETRIES {
+        match capturer.capture_frame() {
+            Ok(data) => return data,
+            Err(err) => {
+                last_error = Some(err);
+                if attempt < MAX_RETRIES {
+                    std::thread::sleep(std::time::Duration::from_millis(RETRY_SLEEP_MS));
+                }
+            }
+        }
+    }
+
+    panic!("Capture failed after retries: {:?}", last_error);
 }
 
 fn release_x11_grabs() {
@@ -138,7 +148,7 @@ impl eframe::App for ScreencapApp {
         let mut trigger_save = false;
         let mut trigger_exit = false;
 
-        let (_ctrl, enter, esc, pointer_pos, primary_down, primary_pressed) = ctx.input(|i| {
+        let (enter, esc, pointer_pos, primary_down, primary_pressed) = ctx.input(|i| {
             // Check events for high-level Copy/Save signals
             for event in &i.events {
                 match event {
@@ -155,7 +165,6 @@ impl eframe::App for ScreencapApp {
             }
 
             (
-                i.modifiers.ctrl || i.modifiers.command,
                 i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Escape),
                 i.pointer.interact_pos(),
@@ -181,7 +190,7 @@ impl eframe::App for ScreencapApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        painter.rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(150));
+        painter.rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(120));
 
         // 4. Interaction Logic
         if let Some(pos) = pointer_pos {
@@ -257,19 +266,29 @@ impl eframe::App for ScreencapApp {
 
             // Controls
             if self.drag_mode == DragMode::None && rect.width() > 10.0 {
-                let btn_pos = rect.right_bottom() + egui::vec2(-160.0, 10.0);
-                let btn_pos = egui::pos2(btn_pos.x.clamp(0.0, screen_rect.max.x - 160.0), btn_pos.y.clamp(0.0, screen_rect.max.y - 40.0));
+                let button_size = 36.0;
+                let spacing = 8.0;
+                let controls_size = egui::vec2(button_size * 2.0 + spacing, button_size);
+                let desired_pos = egui::pos2(rect.max.x - controls_size.x, rect.max.y + 8.0);
+                let controls_pos = egui::pos2(
+                    desired_pos.x.clamp(0.0, screen_rect.max.x - controls_size.x),
+                    desired_pos.y.clamp(0.0, screen_rect.max.y - controls_size.y),
+                );
 
-                egui::Window::new("Controls").fixed_pos(btn_pos).title_bar(false).collapsible(false).resizable(false).frame(egui::Frame::NONE).show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Copy").color(egui::Color32::WHITE).size(16.0).strong()).fill(egui::Color32::from_rgb(52, 152, 219))).clicked() {
-                            self.copy_requested = true;
-                        }
-                        if ui.add(egui::Button::new(egui::RichText::new("Save").color(egui::Color32::WHITE).size(16.0).strong()).fill(egui::Color32::from_rgb(39, 174, 96))).clicked() {
-                            self.save_requested = true;
-                        }
+                egui::Area::new(egui::Id::new("selection_controls"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(controls_pos)
+                    .show(ctx, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(spacing, 0.0);
+                        ui.horizontal(|ui| {
+                            if Self::draw_icon_button(ui, IconKind::Copy, button_size, egui::Color32::from_rgb(34, 139, 230)).clicked() {
+                                self.copy_requested = true;
+                            }
+                            if Self::draw_icon_button(ui, IconKind::Save, button_size, egui::Color32::from_rgb(46, 184, 92)).clicked() {
+                                self.save_requested = true;
+                            }
+                        });
                     });
-                });
             }
         }
 
@@ -286,6 +305,57 @@ impl eframe::App for ScreencapApp {
 }
 
 impl ScreencapApp {
+    fn draw_icon_button(
+        ui: &mut egui::Ui,
+        kind: IconKind,
+        size: f32,
+        fill: egui::Color32,
+    ) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+        let painter = ui.painter();
+
+        let hovered_fill = fill.gamma_multiply(1.15);
+        let bg = if response.hovered() { hovered_fill } else { fill };
+        let border = egui::Color32::from_white_alpha(220);
+        let icon = egui::Color32::WHITE;
+        let stroke = egui::Stroke::new(1.8, icon);
+
+        painter.circle_filled(rect.center(), rect.width() * 0.5, bg);
+        painter.circle_stroke(rect.center(), rect.width() * 0.5, egui::Stroke::new(1.0, border));
+
+        match kind {
+            IconKind::Copy => {
+                let back = rect.shrink(size * 0.34).translate(egui::vec2(-size * 0.07, size * 0.07));
+                let front = rect.shrink(size * 0.34).translate(egui::vec2(size * 0.07, -size * 0.07));
+                Self::stroke_rect(painter, back, stroke);
+                Self::stroke_rect(painter, front, stroke);
+            }
+            IconKind::Save => {
+                let body = rect.shrink(size * 0.30);
+                Self::stroke_rect(painter, body, stroke);
+                let slot_y = body.top() + body.height() * 0.32;
+                painter.line_segment(
+                    [egui::pos2(body.left(), slot_y), egui::pos2(body.right(), slot_y)],
+                    stroke,
+                );
+                let notch = egui::Rect::from_min_max(
+                    egui::pos2(body.left() + body.width() * 0.60, body.top() + body.height() * 0.12),
+                    egui::pos2(body.right() - body.width() * 0.12, body.top() + body.height() * 0.32),
+                );
+                painter.rect_filled(notch, 0.0, icon);
+            }
+        }
+
+        response
+    }
+
+    fn stroke_rect(painter: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+        painter.line_segment([rect.left_top(), rect.right_top()], stroke);
+        painter.line_segment([rect.right_top(), rect.right_bottom()], stroke);
+        painter.line_segment([rect.right_bottom(), rect.left_bottom()], stroke);
+        painter.line_segment([rect.left_bottom(), rect.left_top()], stroke);
+    }
+
     fn save_image(&self, rect: egui::Rect) {
         let (x, y, w, h) = (rect.min.x as u32, rect.min.y as u32, rect.width() as u32, rect.height() as u32);
         if w == 0 || h == 0 { return; }
@@ -321,4 +391,10 @@ impl ScreencapApp {
             let _ = child.wait();
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum IconKind {
+    Copy,
+    Save,
 }

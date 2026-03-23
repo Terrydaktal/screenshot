@@ -24,3 +24,15 @@ evdev = "0.13.2"
 home = "0.5.12"
 image = "0.25.10"
 x11-dl = "2.21.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = 0
+debug-assertions = false
+overflow-checks = false
+incremental = false
+split-debuginfo = "off"

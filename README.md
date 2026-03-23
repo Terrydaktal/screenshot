@@ -7,12 +7,14 @@ This tool was needed because Flameshot could not reliably capture right-click co
 
 Right-click menus are short-lived popup windows. They can disappear when focus changes, and many screenshot tools show their UI first or add enough launch delay that the menu is gone before pixels are captured.
 
-This tool works because it captures first:
-- It grabs the screen frame immediately when the binary starts.
-- Only after the frame is captured does it show the crop UI.
-- It releases X11 pointer/keyboard grabs after capture, which keeps selection interaction stable when a context menu had focus.
-- The daemon reads key events from `/dev/input/event*` (evdev), so it still triggers when context menus grab input inside X11.
-- Normal X11-level shortcut handlers can be blocked by menu grabs, which is why this workflow depends on the daemon path.
+This tool works because it handles two separate failure points:
+- Failure point 1 (trigger): context menus can grab keyboard input inside X11 and steal PrintScreen from normal shortcut handlers.
+- The daemon avoids that by reading `/dev/input/event*` (evdev), so the trigger still fires even when a menu is focused.
+- Failure point 2 (timing): after trigger, the screen must be captured immediately.
+- `screenshot` grabs the frame as soon as the binary starts, before showing any overlay UI.
+- If overlay UI appears before capture, the context menu can lose focus and disappear from the image.
+- Example: you may see the Start menu close on screen when the overlay appears, but it is still present in the crop image because the frame was captured first.
+- After capture, it releases X11 pointer/keyboard grabs to keep crop interaction stable.
 
 ## Recommended operation
 For reliable right-click menu capture, `screenshot-daemon` must be running and must be the only trigger path.
