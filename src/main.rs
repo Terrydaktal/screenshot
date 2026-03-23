@@ -71,6 +71,7 @@ fn main() -> eframe::Result {
                 copy_requested: false,
                 screen_width: width as f32,
                 screen_height: height as f32,
+                focus_requested: false,
             }))
         }),
     )
@@ -121,12 +122,16 @@ struct ScreencapApp {
     copy_requested: bool,
     screen_width: f32,
     screen_height: f32,
+    focus_requested: bool,
 }
 
 impl eframe::App for ScreencapApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1. Force Focus
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        // 1. Request focus once; forcing it every frame can cause flicker.
+        if !self.focus_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.focus_requested = true;
+        }
 
         // 2. Gather All Input and Events
         let mut trigger_copy = false;
