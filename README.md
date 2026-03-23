@@ -32,7 +32,7 @@ Do not keep parallel PrintScreen launchers active (desktop shortcut, `xbindkeys`
 ## Build
 ```bash
 cd /home/lewis/Dev/screenshot
-cargo build --release
+cargo build --release --bins
 ```
 
 ## Daemon-only workflow
@@ -40,29 +40,41 @@ cargo build --release
 
 Manual `./target/release/screenshot` runs are only for debugging, not normal use.
 
+## Service files in this repo
+- `deploy/systemd/screenshot-daemon.service`: systemd user-service template.
+- `scripts/install-user-service.sh`: installs/enables/starts the service for the current user.
+
 ## Run the daemon
-The daemon listens to keyboard events from `/dev/input/event*` and launches the screenshot tool when configured keys are pressed.
+The daemon listens to keyboard events from `/dev/input/event*` and launches `screenshot` when configured keys are pressed.
 
-Run in foreground (good for testing):
+### Run one time (current session only)
+Use this when testing or debugging. It does not persist across reboot/logout.
+
 ```bash
-sudo ./target/release/screenshot-daemon
+cd /home/lewis/Dev/screenshot
+cargo build --release --bin screenshot-daemon
+./target/release/screenshot-daemon
 ```
 
-Run in background:
+### Run as a service (starts automatically at boot/login)
+Use this for normal operation. This installs a systemd user service and enables it.
+
 ```bash
-nohup ./target/release/screenshot-daemon > daemon.log 2>&1 &
+cd /home/lewis/Dev/screenshot
+cargo build --release --bin screenshot-daemon
+./scripts/install-user-service.sh
 ```
 
-Restart daemon:
+Check/start/restart logs:
 ```bash
-pkill -f screenshot-daemon
-nohup ./target/release/screenshot-daemon > daemon.log 2>&1 &
+systemctl --user status screenshot-daemon.service
+systemctl --user restart screenshot-daemon.service
+journalctl --user -u screenshot-daemon.service -f
 ```
 
-Verify daemon is running:
+If you need it to run before login (true boot-time user service), enable linger:
 ```bash
-pgrep -af screenshot-daemon
-tail -n 20 daemon.log
+loginctl enable-linger "$USER"
 ```
 
 Recommended cleanup (avoid duplicate launches):
