@@ -11,6 +11,13 @@ This tool works because it captures first:
 - It grabs the screen frame immediately when the binary starts.
 - Only after the frame is captured does it show the crop UI.
 - It releases X11 pointer/keyboard grabs after capture, which keeps selection interaction stable when a context menu had focus.
+- The daemon reads key events from `/dev/input/event*` (evdev), so it still triggers when context menus grab input inside X11.
+- Normal X11-level shortcut handlers can be blocked by menu grabs, which is why this workflow depends on the daemon path.
+
+## Recommended operation
+For reliable right-click menu capture, `screenshot-daemon` must be running and must be the only trigger path.
+
+Do not keep parallel PrintScreen launchers active (desktop shortcut, `xbindkeys`, etc.), or you can get duplicate screenshot flows.
 
 ## Features
 - **Instant startup**: Rust binary with low launch overhead.
@@ -26,16 +33,10 @@ cd /home/lewis/Dev/screenshot
 cargo build --release
 ```
 
-## Run the screenshot tool
-Run the interactive crop UI directly:
-```bash
-./target/release/screenshot
-```
+## Daemon-only workflow
+`screenshot-daemon` is the required launcher. It starts `screenshot` for each capture.
 
-Hotkey command:
-`/home/lewis/Dev/screenshot/target/release/screenshot`
-
-Use only one trigger source for PrintScreen (Cinnamon shortcut, `xbindkeys`, or `screenshot-daemon`) to avoid duplicate prompts.
+Manual `./target/release/screenshot` runs are only for debugging, not normal use.
 
 ## Run the daemon
 The daemon listens to keyboard events from `/dev/input/event*` and launches the screenshot tool when configured keys are pressed.
@@ -61,5 +62,12 @@ Verify daemon is running:
 pgrep -af screenshot-daemon
 tail -n 20 daemon.log
 ```
+
+Recommended cleanup (avoid duplicate launches):
+```bash
+pkill -f xbindkeys
+```
+
+Also remove any desktop PrintScreen shortcut that launches `screenshot` directly.
 
 If daemon cannot read `/dev/input/event*`, run it with `sudo` or grant your user access to the `input` devices.
