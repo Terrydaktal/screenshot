@@ -952,17 +952,27 @@ impl ScreencapApp {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        if let Ok(mut child) = Command::new("copyq")
-            .args(&["copy", "image/png", "-"])
+        // Prefer xclip so clipboard managers (e.g. CopyQ) observe a normal clipboard
+        // ownership change and store the screenshot in history.
+        let mut copied_with_xclip = false;
+        if let Ok(mut child) = Command::new("xclip")
+            .args(&["-selection", "clipboard", "-t", "image/png"])
             .stdin(Stdio::piped())
             .spawn()
         {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(&buffer);
             }
-            let _ = child.wait();
-        } else if let Ok(mut child) = Command::new("xclip")
-            .args(&["-selection", "clipboard", "-t", "image/png"])
+            copied_with_xclip = child.wait().map(|status| status.success()).unwrap_or(false);
+        }
+
+        if copied_with_xclip {
+            return;
+        }
+
+        // Fallback if xclip is unavailable or failed.
+        if let Ok(mut child) = Command::new("copyq")
+            .args(&["copy", "image/png", "-"])
             .stdin(Stdio::piped())
             .spawn()
         {
