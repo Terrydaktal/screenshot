@@ -28,6 +28,7 @@ Do not keep parallel PrintScreen launchers active (desktop shortcut, `xbindkeys`
 - **Capture-first flow**: Freezes the exact screen state at trigger time.
 - **Crop UI**: Click and drag to select an area.
 - **Clipboard + file output**: Copy to clipboard or save to disk.
+- **Keyboard copy shortcut**: `Ctrl+C` copies the current selection to the clipboard.
 - **CopyQ integration**: Clipboard writes are done through `xclip` first so CopyQ detects updates and stores screenshot history entries (with `copyq` fallback if needed).
 - **Annotation tools**: Draw freehand pen strokes and drag rectangle outlines before copying/saving.
 - **Pen controls**: Change pen size and color.
