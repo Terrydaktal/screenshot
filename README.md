@@ -9,11 +9,13 @@ Right-click menus are short-lived popup windows. They can disappear when focus c
 
 This tool works because it handles two separate failure points:
 - Failure point 1 (trigger): context menus can grab keyboard input inside X11 and steal PrintScreen from normal shortcut handlers.
+- In practice this can look like: you press PrintScreen while a right-click menu is open and no screenshot overlay appears at all.
 - The daemon avoids that by reading `/dev/input/event*` (evdev), so the trigger still fires even when a menu is focused.
 - Failure point 2 (timing): after trigger, the screen must be captured immediately.
 - `screenshot` grabs the frame as soon as the binary starts, before showing any overlay UI.
 - If overlay UI appears before capture, the context menu can lose focus and disappear from the image.
 - Example: you may see the Start menu close on screen when the overlay appears, but it is still present in the crop image because the frame was captured first.
+- Another example: when a terminal/console has focus, pressing PrintScreen can force it to jump/scroll to the bottom; if capture happens after that UI reaction, you can no longer screenshot content that was visible in the scrollback buffer.
 - After capture, it releases X11 pointer/keyboard grabs to keep crop interaction stable.
 
 ## Recommended operation

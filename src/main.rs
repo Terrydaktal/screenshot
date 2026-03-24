@@ -300,22 +300,8 @@ impl eframe::App for ScreenshotApp {
                     self.drag_mode = DragMode::None;
                     if let Some(rect) = self.selection {
                         let handle_size = 20.0;
-                        let on_top = (pos.y - rect.min.y).abs() < handle_size;
-                        let on_bottom = (pos.y - rect.max.y).abs() < handle_size;
-                        let on_left = (pos.x - rect.min.x).abs() < handle_size;
-                        let on_right = (pos.x - rect.max.x).abs() < handle_size;
-                        let edge_check = pos.x >= rect.min.x - handle_size
-                            && pos.x <= rect.max.x + handle_size
-                            && pos.y >= rect.min.y - handle_size
-                            && pos.y <= rect.max.y + handle_size;
-
-                        if (on_top || on_bottom || on_left || on_right) && edge_check {
-                            self.drag_mode = DragMode::Resizing(ResizeEdge {
-                                top: on_top,
-                                bottom: on_bottom,
-                                left: on_left,
-                                right: on_right,
-                            });
+                        if let Some(edge) = Self::resize_edge_at(rect, pos, handle_size) {
+                            self.drag_mode = DragMode::Resizing(edge);
                         } else if rect.contains(pos) {
                             self.drag_mode = DragMode::Moving;
                         } else {
@@ -375,7 +361,36 @@ impl eframe::App for ScreenshotApp {
             self.finalize_active_annotation();
         }
 
-        // 5. Draw Selection
+        // 5. Cursor hints for move/resize interactions on the selection border.
+        if !self.pen_mode && !self.rect_mode && !ctx.wants_pointer_input() {
+            if let Some(pos) = pointer_pos {
+                if let Some(rect) = self.selection {
+                    let handle_size = 20.0;
+                    let hover_cursor = if primary_down {
+                        match self.drag_mode {
+                            DragMode::Resizing(edge) => Some(Self::cursor_for_resize_edge(edge)),
+                            DragMode::Moving => Some(egui::CursorIcon::Grabbing),
+                            DragMode::Creating => Some(egui::CursorIcon::Crosshair),
+                            DragMode::None => None,
+                        }
+                    } else if let Some(edge) = Self::resize_edge_at(rect, pos, handle_size) {
+                        Some(Self::cursor_for_resize_edge(edge))
+                    } else if rect.contains(pos) {
+                        Some(egui::CursorIcon::Grab)
+                    } else {
+                        Some(egui::CursorIcon::Crosshair)
+                    };
+
+                    if let Some(cursor) = hover_cursor {
+                        ctx.set_cursor_icon(cursor);
+                    }
+                } else {
+                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+            }
+        }
+
+        // 6. Draw Selection
         if let Some(rect) = self.selection {
             let rect = rect.intersect(screen_rect);
             let mut mesh = egui::Mesh::with_texture(self.texture.id());
@@ -397,7 +412,7 @@ impl eframe::App for ScreenshotApp {
             painter.rect_stroke(
                 rect,
                 0.0,
-                egui::Stroke::new(2.0, egui::Color32::WHITE),
+                egui::Stroke::new(1.4, egui::Color32::WHITE),
                 egui::StrokeKind::Outside,
             );
             let annotation_painter = painter.with_clip_rect(rect);
@@ -550,7 +565,7 @@ impl eframe::App for ScreenshotApp {
             }
         }
 
-        // 6. Action Execution
+        // 7. Action Execution
         if self.save_requested {
             if let Some(rect) = self.selection {
                 self.save_image(rect);
@@ -567,6 +582,42 @@ impl eframe::App for ScreenshotApp {
 }
 
 impl ScreenshotApp {
+    fn resize_edge_at(rect: egui::Rect, pos: egui::Pos2, handle_size: f32) -> Option<ResizeEdge> {
+        let on_top = (pos.y - rect.min.y).abs() < handle_size;
+        let on_bottom = (pos.y - rect.max.y).abs() < handle_size;
+        let on_left = (pos.x - rect.min.x).abs() < handle_size;
+        let on_right = (pos.x - rect.max.x).abs() < handle_size;
+        let edge_check = pos.x >= rect.min.x - handle_size
+            && pos.x <= rect.max.x + handle_size
+            && pos.y >= rect.min.y - handle_size
+            && pos.y <= rect.max.y + handle_size;
+
+        if (on_top || on_bottom || on_left || on_right) && edge_check {
+            Some(ResizeEdge {
+                top: on_top,
+                bottom: on_bottom,
+                left: on_left,
+                right: on_right,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn cursor_for_resize_edge(edge: ResizeEdge) -> egui::CursorIcon {
+        if (edge.top && edge.left) || (edge.bottom && edge.right) {
+            egui::CursorIcon::ResizeNwSe
+        } else if (edge.top && edge.right) || (edge.bottom && edge.left) {
+            egui::CursorIcon::ResizeNeSw
+        } else if edge.left || edge.right {
+            egui::CursorIcon::ResizeHorizontal
+        } else if edge.top || edge.bottom {
+            egui::CursorIcon::ResizeVertical
+        } else {
+            egui::CursorIcon::Default
+        }
+    }
+
     fn draw_icon_button(
         ui: &mut egui::Ui,
         kind: IconKind,
