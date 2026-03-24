@@ -25,7 +25,11 @@ Do not keep parallel PrintScreen launchers active (desktop shortcut, `xbindkeys`
 - **Instant startup**: Rust binary with low launch overhead.
 - **Capture-first flow**: Freezes the exact screen state at trigger time.
 - **Crop UI**: Click and drag to select an area.
-- **Copy/Save actions**: Copy to clipboard or save to disk.
+- **Clipboard + file output**: Copy to clipboard or save to disk.
+- **CopyQ integration**: Clipboard writes are done through `xclip` first so CopyQ detects updates and stores screenshot history entries (with `copyq` fallback if needed).
+- **Annotation tools**: Draw freehand pen strokes and drag rectangle outlines before copying/saving.
+- **Pen controls**: Change pen size and color.
+- **Undo support**: Undo the most recent drawing action.
 - **Esc to cancel**: Exit without saving.
 - **Auto output path**: Saves to `~/Pictures/Screenshots` with timestamps.
 
@@ -43,6 +47,18 @@ Manual `./target/release/screenshot` runs are only for debugging, not normal use
 ## Service files in this repo
 - `deploy/systemd/screenshot-daemon.service`: systemd user-service template.
 - `scripts/install-user-service.sh`: installs/enables/starts the service for the current user.
+- `scripts/disable-screenshot-animations.sh`: disables screenshot-window animations in KDE by enabling a KWin rule.
+- `scripts/enable-screenshot-animations.sh`: re-enables screenshot-window animations in KDE by disabling that rule.
+
+## Clipboard integration (CopyQ)
+`screenshot` writes PNG data to the X11 clipboard using `xclip` as the primary path. This lets CopyQ detect a normal clipboard ownership change and store the screenshot in history.
+
+If `xclip` is unavailable, the tool falls back to `copyq copy image/png -`.
+
+Dependencies for best clipboard behavior:
+```bash
+sudo apt-get install xclip copyq
+```
 
 ## Run the daemon
 The daemon listens to keyboard events from `/dev/input/event*` and launches `screenshot` when configured keys are pressed.
@@ -75,6 +91,17 @@ journalctl --user -u screenshot-daemon.service -f
 If you need it to run before login (true boot-time user service), enable linger:
 ```bash
 loginctl enable-linger "$USER"
+```
+
+## KDE animation scripts
+To disable screenshot-window animation effects (KWin rule):
+```bash
+./scripts/disable-screenshot-animations.sh
+```
+
+To re-enable screenshot-window animation effects:
+```bash
+./scripts/enable-screenshot-animations.sh
 ```
 
 Recommended cleanup (avoid duplicate launches):

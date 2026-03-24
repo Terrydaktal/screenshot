@@ -32,6 +32,7 @@ fn main() -> eframe::Result {
             // Use fixed origin + explicit size to avoid WM fullscreen transition animations.
             .with_position([0.0, 0.0])
             .with_inner_size(screen_size)
+            .with_window_type(egui::X11WindowType::PopupMenu)
             .with_resizable(false)
             .with_always_on_top()
             .with_decorations(false)
@@ -41,7 +42,7 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Screencap Rust",
+        "screenshot",
         options,
         Box::new(move |cc| {
             let size = [width as usize, height as usize];
@@ -53,7 +54,7 @@ fn main() -> eframe::Result {
                 cc.egui_ctx
                     .load_texture("screen_capture", color_image, Default::default());
 
-            Ok(Box::new(ScreencapApp {
+            Ok(Box::new(ScreenshotApp {
                 texture,
                 full_image: dynamic_image,
                 selection: None,
@@ -152,7 +153,7 @@ enum Annotation {
     Rect(RectShape),
 }
 
-struct ScreencapApp {
+struct ScreenshotApp {
     texture: egui::TextureHandle,
     full_image: DynamicImage,
     selection: Option<egui::Rect>,
@@ -172,7 +173,7 @@ struct ScreencapApp {
     current_rect_shape: Option<RectShape>,
 }
 
-impl eframe::App for ScreencapApp {
+impl eframe::App for ScreenshotApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 1. Request focus once; forcing it every frame can cause flicker.
         if !self.focus_requested {
@@ -565,7 +566,7 @@ impl eframe::App for ScreencapApp {
     }
 }
 
-impl ScreencapApp {
+impl ScreenshotApp {
     fn draw_icon_button(
         ui: &mut egui::Ui,
         kind: IconKind,
