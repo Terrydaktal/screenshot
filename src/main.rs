@@ -1,21 +1,38 @@
 use chrono::Local;
 use eframe::egui;
 use image::{DynamicImage, Rgba, RgbaImage};
+use std::io::Read;
 use std::path::PathBuf;
 use x11_dl::xlib;
 
 fn main() -> eframe::Result {
-    let mut capturer = captrs::Capturer::new(0).expect("Failed to create capturer");
-    let (width, height) = capturer.geometry();
+    let (width, height, rgb_pixels) =
+        if let Some((stdin_width, stdin_height)) = parse_stdin_rgb_args() {
+            (
+                stdin_width,
+                stdin_height,
+                read_rgb_frame_from_stdin(stdin_width, stdin_height),
+            )
+        } else {
+            let mut capturer = captrs::Capturer::new(0).expect("Failed to create capturer");
+            let (width, height) = capturer.geometry();
 
-    // Prefer a few short retries over a single long fallback delay.
-    let image_data = capture_frame_with_retries(&mut capturer);
+            // Prefer a few short retries over a single long fallback delay.
+            let image_data = capture_frame_with_retries(&mut capturer);
+            let mut rgb_pixels = Vec::with_capacity((width * height * 3) as usize);
+            for pixel in image_data {
+                rgb_pixels.push(pixel.r);
+                rgb_pixels.push(pixel.g);
+                rgb_pixels.push(pixel.b);
+            }
+            (width, height, rgb_pixels)
+        };
 
     let mut rgba_pixels = Vec::with_capacity((width * height * 4) as usize);
-    for pixel in image_data {
-        rgba_pixels.push(pixel.r);
-        rgba_pixels.push(pixel.g);
-        rgba_pixels.push(pixel.b);
+    for rgb in rgb_pixels.chunks_exact(3) {
+        rgba_pixels.push(rgb[0]);
+        rgba_pixels.push(rgb[1]);
+        rgba_pixels.push(rgb[2]);
         rgba_pixels.push(255);
     }
 
@@ -78,8 +95,8 @@ fn main() -> eframe::Result {
 }
 
 fn capture_frame_with_retries(capturer: &mut captrs::Capturer) -> Vec<captrs::Bgr8> {
-    const MAX_RETRIES: usize = 6;
-    const RETRY_SLEEP_MS: u64 = 8;
+    const MAX_RETRIES: usize = 2;
+    const RETRY_SLEEP_MS: u64 = 2;
 
     let mut last_error: Option<captrs::CaptureError> = None;
     for attempt in 0..=MAX_RETRIES {
@@ -95,6 +112,39 @@ fn capture_frame_with_retries(capturer: &mut captrs::Capturer) -> Vec<captrs::Bg
     }
 
     panic!("Capture failed after retries: {:?}", last_error);
+}
+
+fn parse_stdin_rgb_args() -> Option<(u32, u32)> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some("--stdin-rgb") {
+        return None;
+    }
+
+    let width = args
+        .next()
+        .expect("Missing WIDTH for --stdin-rgb")
+        .parse::<u32>()
+        .expect("Invalid WIDTH for --stdin-rgb");
+    let height = args
+        .next()
+        .expect("Missing HEIGHT for --stdin-rgb")
+        .parse::<u32>()
+        .expect("Invalid HEIGHT for --stdin-rgb");
+
+    assert!(
+        width > 0 && height > 0,
+        "WIDTH and HEIGHT must be greater than zero",
+    );
+    Some((width, height))
+}
+
+fn read_rgb_frame_from_stdin(width: u32, height: u32) -> Vec<u8> {
+    let expected_len = width as usize * height as usize * 3;
+    let mut rgb_pixels = vec![0_u8; expected_len];
+    std::io::stdin()
+        .read_exact(&mut rgb_pixels)
+        .expect("Failed to read prefetched RGB frame from stdin");
+    rgb_pixels
 }
 
 fn release_x11_grabs() {
@@ -513,8 +563,10 @@ impl eframe::App for ScreenshotApp {
                     let slider_width = 150.0;
                     let color_width = 40.0;
                     let draw_tools_gap = 20.0;
-                    let draw_tools_size =
-                        egui::vec2(color_width + spacing + slider_width + spacing + button_size, button_size);
+                    let draw_tools_size = egui::vec2(
+                        color_width + spacing + slider_width + spacing + button_size,
+                        button_size,
+                    );
                     let left_aligned_x = action_pos.x - draw_tools_gap - draw_tools_size.x;
                     let draw_tools_pos = if left_aligned_x >= 0.0 {
                         egui::pos2(
