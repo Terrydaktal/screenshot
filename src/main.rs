@@ -79,8 +79,6 @@ fn main() -> eframe::Result {
                 drag_mode: DragMode::None,
                 save_requested: false,
                 copy_requested: false,
-                screen_width: width as f32,
-                screen_height: height as f32,
                 focus_requested: false,
                 pen_mode: false,
                 rect_mode: false,
@@ -211,8 +209,6 @@ struct ScreenshotApp {
     drag_mode: DragMode,
     save_requested: bool,
     copy_requested: bool,
-    screen_width: f32,
-    screen_height: f32,
     focus_requested: bool,
     pen_mode: bool,
     rect_mode: bool,
@@ -289,7 +285,7 @@ impl eframe::App for ScreenshotApp {
             }
         }
 
-        let screen_rect = ctx.input(|i| i.screen_rect());
+        let screen_rect = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::background());
 
         // 3. Draw Background
@@ -446,16 +442,7 @@ impl eframe::App for ScreenshotApp {
             let mut mesh = egui::Mesh::with_texture(self.texture.id());
             mesh.add_rect_with_uv(
                 rect,
-                egui::Rect::from_min_max(
-                    egui::pos2(
-                        rect.min.x / self.screen_width,
-                        rect.min.y / self.screen_height,
-                    ),
-                    egui::pos2(
-                        rect.max.x / self.screen_width,
-                        rect.max.y / self.screen_height,
-                    ),
-                ),
+                Self::selection_uv_rect(rect, screen_rect),
                 egui::Color32::WHITE,
             );
             painter.add(mesh);
@@ -620,13 +607,13 @@ impl eframe::App for ScreenshotApp {
         // 7. Action Execution
         if self.save_requested {
             if let Some(rect) = self.selection {
-                self.save_image(rect);
+                self.save_image(rect, screen_rect);
             }
             std::process::exit(0);
         }
         if self.copy_requested {
             if let Some(rect) = self.selection {
-                self.copy_image(rect);
+                self.copy_image(rect, screen_rect);
             }
             std::process::exit(0);
         }
@@ -896,45 +883,118 @@ impl ScreenshotApp {
         )
     }
 
-    fn crop_with_annotations(&self, rect: egui::Rect) -> Option<RgbaImage> {
-        let (x, y, w, h) = (
-            rect.min.x as u32,
-            rect.min.y as u32,
-            rect.width() as u32,
-            rect.height() as u32,
-        );
+    fn selection_uv_rect(selection_rect: egui::Rect, screen_rect: egui::Rect) -> egui::Rect {
+        let width = screen_rect.width().max(1.0);
+        let height = screen_rect.height().max(1.0);
+        let u_min = ((selection_rect.min.x - screen_rect.min.x) / width).clamp(0.0, 1.0);
+        let v_min = ((selection_rect.min.y - screen_rect.min.y) / height).clamp(0.0, 1.0);
+        let u_max = ((selection_rect.max.x - screen_rect.min.x) / width).clamp(0.0, 1.0);
+        let v_max = ((selection_rect.max.y - screen_rect.min.y) / height).clamp(0.0, 1.0);
+        egui::Rect::from_min_max(egui::pos2(u_min, v_min), egui::pos2(u_max, v_max))
+    }
+
+    fn selection_to_image_pixels(
+        &self,
+        selection_rect: egui::Rect,
+        screen_rect: egui::Rect,
+    ) -> Option<(u32, u32, u32, u32)> {
+        let image_width = self.full_image.width();
+        let image_height = self.full_image.height();
+
+        let width = screen_rect.width().max(1.0);
+        let height = screen_rect.height().max(1.0);
+
+        let u_min = ((selection_rect.min.x - screen_rect.min.x) / width).clamp(0.0, 1.0);
+        let v_min = ((selection_rect.min.y - screen_rect.min.y) / height).clamp(0.0, 1.0);
+        let u_max = ((selection_rect.max.x - screen_rect.min.x) / width).clamp(0.0, 1.0);
+        let v_max = ((selection_rect.max.y - screen_rect.min.y) / height).clamp(0.0, 1.0);
+
+        let x = (u_min * image_width as f32).floor() as u32;
+        let y = (v_min * image_height as f32).floor() as u32;
+        let right = (u_max * image_width as f32).ceil() as u32;
+        let bottom = (v_max * image_height as f32).ceil() as u32;
+
+        let right = right.clamp(0, image_width);
+        let bottom = bottom.clamp(0, image_height);
+        let x = x.min(right);
+        let y = y.min(bottom);
+        let w = right.saturating_sub(x);
+        let h = bottom.saturating_sub(y);
+
         if w == 0 || h == 0 {
             return None;
         }
 
+        Some((x, y, w, h))
+    }
+
+    fn image_scale_for_selection(image: &RgbaImage, selection_rect: egui::Rect) -> (f32, f32) {
+        let sx = image.width() as f32 / selection_rect.width().max(1.0);
+        let sy = image.height() as f32 / selection_rect.height().max(1.0);
+        (sx, sy)
+    }
+
+    fn selection_pos_to_image_pos(
+        pos: egui::Pos2,
+        selection_rect: egui::Rect,
+        selection_to_image_scale: (f32, f32),
+    ) -> (f32, f32) {
+        let local_x = (pos.x - selection_rect.min.x).clamp(0.0, selection_rect.width());
+        let local_y = (pos.y - selection_rect.min.y).clamp(0.0, selection_rect.height());
+        (
+            local_x * selection_to_image_scale.0,
+            local_y * selection_to_image_scale.1,
+        )
+    }
+
+    fn crop_with_annotations(
+        &self,
+        selection_rect: egui::Rect,
+        screen_rect: egui::Rect,
+    ) -> Option<RgbaImage> {
+        let (x, y, w, h) = self.selection_to_image_pixels(selection_rect, screen_rect)?;
+
         let mut cropped = self.full_image.crop_imm(x, y, w, h).to_rgba8();
-        self.draw_annotations_on_image(&mut cropped, rect);
+        self.draw_annotations_on_image(&mut cropped, selection_rect);
         Some(cropped)
     }
 
-    fn draw_annotations_on_image(&self, image: &mut RgbaImage, rect: egui::Rect) {
+    fn draw_annotations_on_image(&self, image: &mut RgbaImage, selection_rect: egui::Rect) {
         for annotation in &self.annotations {
-            Self::draw_annotation_on_image(image, rect, annotation);
+            Self::draw_annotation_on_image(image, selection_rect, annotation);
         }
         if let Some(stroke) = &self.current_pen_stroke {
-            Self::draw_pen_stroke_on_image(image, rect, stroke);
+            Self::draw_pen_stroke_on_image(image, selection_rect, stroke);
         }
         if let Some(shape) = &self.current_rect_shape {
-            Self::draw_rect_shape_on_image(image, rect, shape);
+            Self::draw_rect_shape_on_image(image, selection_rect, shape);
         }
     }
 
-    fn draw_annotation_on_image(image: &mut RgbaImage, rect: egui::Rect, annotation: &Annotation) {
+    fn draw_annotation_on_image(
+        image: &mut RgbaImage,
+        selection_rect: egui::Rect,
+        annotation: &Annotation,
+    ) {
         match annotation {
-            Annotation::Pen(stroke) => Self::draw_pen_stroke_on_image(image, rect, stroke),
-            Annotation::Rect(shape) => Self::draw_rect_shape_on_image(image, rect, shape),
+            Annotation::Pen(stroke) => {
+                Self::draw_pen_stroke_on_image(image, selection_rect, stroke)
+            }
+            Annotation::Rect(shape) => Self::draw_rect_shape_on_image(image, selection_rect, shape),
         }
     }
 
-    fn draw_pen_stroke_on_image(image: &mut RgbaImage, rect: egui::Rect, stroke: &PenStroke) {
+    fn draw_pen_stroke_on_image(
+        image: &mut RgbaImage,
+        selection_rect: egui::Rect,
+        stroke: &PenStroke,
+    ) {
         if stroke.points.len() < 2 {
             return;
         }
+
+        let scale = Self::image_scale_for_selection(image, selection_rect);
+        let stroke_width = stroke.width * scale.0.max(scale.1);
 
         let rgba = Rgba([
             stroke.color.r(),
@@ -946,19 +1006,24 @@ impl ScreenshotApp {
         for segment in stroke.points.windows(2) {
             let p0 = segment[0];
             let p1 = segment[1];
-            let x0 = p0.x - rect.min.x;
-            let y0 = p0.y - rect.min.y;
-            let x1 = p1.x - rect.min.x;
-            let y1 = p1.y - rect.min.y;
-            Self::draw_thick_line(image, x0, y0, x1, y1, stroke.width, rgba);
+            let (x0, y0) = Self::selection_pos_to_image_pos(p0, selection_rect, scale);
+            let (x1, y1) = Self::selection_pos_to_image_pos(p1, selection_rect, scale);
+            Self::draw_thick_line(image, x0, y0, x1, y1, stroke_width, rgba);
         }
     }
 
-    fn draw_rect_shape_on_image(image: &mut RgbaImage, rect: egui::Rect, shape: &RectShape) {
+    fn draw_rect_shape_on_image(
+        image: &mut RgbaImage,
+        selection_rect: egui::Rect,
+        shape: &RectShape,
+    ) {
         let draw_rect = egui::Rect::from_two_pos(shape.start, shape.end);
         if draw_rect.width() < 1.0 || draw_rect.height() < 1.0 {
             return;
         }
+
+        let scale = Self::image_scale_for_selection(image, selection_rect);
+        let stroke_width = shape.width * scale.0.max(scale.1);
 
         let rgba = Rgba([
             shape.color.r(),
@@ -967,15 +1032,14 @@ impl ScreenshotApp {
             shape.color.a(),
         ]);
 
-        let left = draw_rect.min.x - rect.min.x;
-        let right = draw_rect.max.x - rect.min.x;
-        let top = draw_rect.min.y - rect.min.y;
-        let bottom = draw_rect.max.y - rect.min.y;
+        let (left, top) = Self::selection_pos_to_image_pos(draw_rect.min, selection_rect, scale);
+        let (right, bottom) =
+            Self::selection_pos_to_image_pos(draw_rect.max, selection_rect, scale);
 
-        Self::draw_thick_line(image, left, top, right, top, shape.width, rgba);
-        Self::draw_thick_line(image, right, top, right, bottom, shape.width, rgba);
-        Self::draw_thick_line(image, right, bottom, left, bottom, shape.width, rgba);
-        Self::draw_thick_line(image, left, bottom, left, top, shape.width, rgba);
+        Self::draw_thick_line(image, left, top, right, top, stroke_width, rgba);
+        Self::draw_thick_line(image, right, top, right, bottom, stroke_width, rgba);
+        Self::draw_thick_line(image, right, bottom, left, bottom, stroke_width, rgba);
+        Self::draw_thick_line(image, left, bottom, left, top, stroke_width, rgba);
     }
 
     fn draw_thick_line(
@@ -1032,8 +1096,8 @@ impl ScreenshotApp {
         painter.line_segment([rect.left_bottom(), rect.left_top()], stroke);
     }
 
-    fn save_image(&self, rect: egui::Rect) {
-        let Some(cropped) = self.crop_with_annotations(rect) else {
+    fn save_image(&self, rect: egui::Rect, screen_rect: egui::Rect) {
+        let Some(cropped) = self.crop_with_annotations(rect, screen_rect) else {
             return;
         };
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -1046,8 +1110,8 @@ impl ScreenshotApp {
         let _ = DynamicImage::ImageRgba8(cropped).save(&path);
     }
 
-    fn copy_image(&self, rect: egui::Rect) {
-        let Some(cropped) = self.crop_with_annotations(rect) else {
+    fn copy_image(&self, rect: egui::Rect, screen_rect: egui::Rect) {
+        let Some(cropped) = self.crop_with_annotations(rect, screen_rect) else {
             return;
         };
         let mut buffer: Vec<u8> = Vec::new();

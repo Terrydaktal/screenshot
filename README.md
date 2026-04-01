@@ -12,7 +12,11 @@ This tool works because it handles two separate failure points:
 - In practice this can look like: you press PrintScreen while a right-click menu is open and no screenshot overlay appears at all.
 - The daemon avoids that by reading `/dev/input/event*` (evdev), so the trigger still fires even when a menu is focused.
 - Failure point 2 (timing): after trigger, the screen must be captured immediately.
-- `screenshot` grabs the frame as soon as the binary starts, before showing any overlay UI.
+- Current flow: `screenshot-daemon` pre-captures the frame immediately on key press, then launches `screenshot` and passes that frame in.
+- This means snapshot timing is anchored at daemon trigger time, not delayed until overlay process startup.
+- Why retries are needed: the first capture call can occasionally race the compositor/X11 frame pipeline and fail transiently even though the next frame is available a few milliseconds later.
+- The daemon therefore uses a very short retry loop (up to 6 retries, 2 ms apart) to keep captures reliable without adding noticeable delay.
+- Fallback flow: if daemon pre-capture fails, `screenshot` still captures as soon as the binary starts, before showing any overlay UI.
 - If overlay UI appears before capture, the context menu can lose focus and disappear from the image.
 - Example: you may see the Start menu close on screen when the overlay appears, but it is still present in the crop image because the frame was captured first.
 - Another example: when a terminal/console has focus, pressing PrintScreen can force it to jump/scroll to the bottom; if capture happens after that UI reaction, you can no longer screenshot content that was visible in the scrollback buffer.

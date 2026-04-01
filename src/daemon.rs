@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 const SCREENSHOT_BIN: &str = "/home/lewis/Dev/screenshot/target/release/screenshot";
 const LAUNCH_COOLDOWN_MS: u64 = 1000;
-const CAPTURE_RETRIES: usize = 2;
+const CAPTURE_RETRIES: usize = 6;
 const CAPTURE_RETRY_SLEEP_MS: u64 = 2;
 
 fn main() {
