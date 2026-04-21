@@ -1,5 +1,6 @@
 use captrs::{Bgr8, CaptureError, Capturer};
 use evdev::{Device, EventType};
+use std::collections::HashSet;
 use std::env;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -10,67 +11,152 @@ const SCREENSHOT_BIN: &str = "/home/lewis/Dev/screenshot/target/release/screensh
 const LAUNCH_COOLDOWN_MS: u64 = 1000;
 const CAPTURE_RETRIES: usize = 6;
 const CAPTURE_RETRY_SLEEP_MS: u64 = 2;
+const DEVICE_SCAN_INTERVAL_MS: u64 = 1500;
+const INPUT_DIR: &str = "/dev/input";
 
 fn main() {
     let env_vars: Vec<(String, String)> = env::vars().collect();
     let last_launch = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
+    let active_listeners = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let mut warned_no_listeners = false;
 
-    for i in 0..20 {
-        let path = format!("/dev/input/event{}", i);
-        if let Ok(d) = Device::open(&path) {
-            let name = d.name().unwrap_or_default().to_lowercase();
-            if name.contains("keyboard") || name.contains("strafe") {
+    loop {
+        attach_input_listeners(&env_vars, &last_launch, &active_listeners);
+
+        let active_count = active_listeners.lock().unwrap().len();
+        if active_count == 0 {
+            if !warned_no_listeners {
+                eprintln!(
+                    "WARN: no keyboard listeners active; retrying device scan every {} ms",
+                    DEVICE_SCAN_INTERVAL_MS
+                );
+                warned_no_listeners = true;
+            }
+        } else {
+            warned_no_listeners = false;
+        }
+
+        std::thread::sleep(Duration::from_millis(DEVICE_SCAN_INTERVAL_MS));
+    }
+}
+
+fn attach_input_listeners(
+    env_vars: &[(String, String)],
+    last_launch: &Arc<Mutex<Instant>>,
+    active_listeners: &Arc<Mutex<HashSet<String>>>,
+) {
+    let Ok(entries) = std::fs::read_dir(INPUT_DIR) else {
+        eprintln!("WARN: failed to read {INPUT_DIR}; will retry");
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path_buf = entry.path();
+        let Some(file_name) = path_buf.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("event") {
+            continue;
+        }
+
+        let path = path_buf.to_string_lossy().to_string();
+        {
+            let mut active = active_listeners.lock().unwrap();
+            if active.contains(&path) {
+                continue;
+            }
+            active.insert(path.clone());
+        }
+
+        match Device::open(&path) {
+            Ok(device) => {
+                let name = device.name().unwrap_or_default().to_lowercase();
+                if !(name.contains("keyboard") || name.contains("strafe")) {
+                    active_listeners.lock().unwrap().remove(&path);
+                    continue;
+                }
+
                 println!("READY: Listening on {} ({})", path, name);
-
-                let last_launch_clone = last_launch.clone();
-                let env_vars_clone = env_vars.clone();
+                let last_launch_clone = Arc::clone(last_launch);
+                let env_vars_clone = env_vars.to_vec();
+                let active_clone = Arc::clone(active_listeners);
 
                 std::thread::spawn(move || {
-                    let mut device = Device::open(&path).expect("Failed to reopen");
-                    loop {
-                        for event in device.fetch_events().expect("Read error") {
-                            if event.event_type() != EventType::KEY || event.value() != 1 {
-                                continue;
-                            }
-
-                            let code = event.code();
-                            // Support PrintScreen (99), ScrollLock (70), or Pause (119)
-                            if code != 99 && code != 70 && code != 119 {
-                                continue;
-                            }
-
-                            let mut should_launch = false;
-                            {
-                                let mut last = last_launch_clone.lock().unwrap();
-                                if last.elapsed() > Duration::from_millis(LAUNCH_COOLDOWN_MS) {
-                                    *last = Instant::now();
-                                    should_launch = true;
-                                }
-                            }
-
-                            if !should_launch {
-                                continue;
-                            }
-
-                            if let Ok((width, height, rgb_pixels)) = capture_rgb_frame_fast() {
-                                if spawn_prefetched(&env_vars_clone, width, height, &rgb_pixels)
-                                    .is_ok()
-                                {
-                                    continue;
-                                }
-                            }
-
-                            let _ = spawn_plain(&env_vars_clone);
-                        }
-                    }
+                    run_input_listener(path, last_launch_clone, env_vars_clone, active_clone);
                 });
+            }
+            Err(err) => {
+                active_listeners.lock().unwrap().remove(&path);
+                eprintln!("WARN: failed to open {path}: {err}; will retry");
             }
         }
     }
+}
 
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
+fn run_input_listener(
+    path: String,
+    last_launch: Arc<Mutex<Instant>>,
+    env_vars: Vec<(String, String)>,
+    active_listeners: Arc<Mutex<HashSet<String>>>,
+) {
+    let result: Result<(), String> = (|| {
+        let mut device = Device::open(&path).map_err(|err| format!("Failed to reopen: {err}"))?;
+        loop {
+            let events = device
+                .fetch_events()
+                .map_err(|err| format!("Read error: {err}"))?;
+            for event in events {
+                if event.event_type() != EventType::KEY || event.value() != 1 {
+                    continue;
+                }
+
+                let code = event.code();
+                // Support PrintScreen (99), ScrollLock (70), or Pause (119)
+                if code != 99 && code != 70 && code != 119 {
+                    continue;
+                }
+
+                let mut should_launch = false;
+                {
+                    let mut last = last_launch.lock().unwrap();
+                    if last.elapsed() > Duration::from_millis(LAUNCH_COOLDOWN_MS) {
+                        *last = Instant::now();
+                        should_launch = true;
+                    }
+                }
+
+                if !should_launch {
+                    continue;
+                }
+
+                match capture_rgb_frame_fast() {
+                    Ok((width, height, rgb_pixels)) => {
+                        match spawn_prefetched(&env_vars, width, height, &rgb_pixels) {
+                            Ok(()) => continue,
+                            Err(err) => {
+                                eprintln!(
+                                    "WARN: prefetched screenshot launch failed ({err}); falling back to plain launch"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("WARN: pre-capture failed ({err}); falling back to plain launch");
+                    }
+                }
+
+                if let Err(err) = spawn_plain(&env_vars) {
+                    eprintln!("ERROR: plain screenshot launch failed: {err}");
+                }
+            }
+        }
+    })();
+
+    if let Err(err) = result {
+        eprintln!("WARN: listener on {path} stopped: {err}");
     }
+
+    active_listeners.lock().unwrap().remove(&path);
 }
 
 fn capture_rgb_frame_fast() -> Result<(usize, usize, Vec<u8>), String> {
@@ -117,12 +203,10 @@ fn spawn_prefetched(
     cmd.arg("--stdin-rgb")
         .arg(width.to_string())
         .arg(height.to_string());
-    for (k, v) in env_vars {
-        cmd.env(k, v);
-    }
+    configure_child_env(&mut cmd, env_vars);
     cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
 
     let mut child = cmd.spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -134,11 +218,22 @@ fn spawn_prefetched(
 
 fn spawn_plain(env_vars: &[(String, String)]) -> std::io::Result<()> {
     let mut cmd = Command::new(SCREENSHOT_BIN);
+    configure_child_env(&mut cmd, env_vars);
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+    let _ = cmd.spawn()?;
+    Ok(())
+}
+
+fn configure_child_env(cmd: &mut Command, env_vars: &[(String, String)]) {
     for (k, v) in env_vars {
         cmd.env(k, v);
     }
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
-    let _ = cmd.spawn()?;
-    Ok(())
+
+    if env::var_os("RUST_BACKTRACE").is_none() {
+        cmd.env("RUST_BACKTRACE", "full");
+    }
+    if env::var_os("RUST_LIB_BACKTRACE").is_none() {
+        cmd.env("RUST_LIB_BACKTRACE", "full");
+    }
 }

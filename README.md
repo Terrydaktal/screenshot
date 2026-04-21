@@ -34,6 +34,7 @@ Do not keep parallel PrintScreen launchers active (desktop shortcut, `xbindkeys`
 - **Clipboard + file output**: Copy to clipboard or save to disk.
 - **Keyboard copy shortcut**: `Ctrl+C` copies the current selection to the clipboard.
 - **CopyQ integration**: Clipboard writes are done through `xclip` first so CopyQ detects updates and stores screenshot history entries (with `copyq` fallback if needed).
+- **No temp capture files**: Capture/copy path stays in memory and pipes bytes directly to clipboard tools.
 - **Annotation tools**: Draw freehand pen strokes and drag rectangle outlines before copying/saving.
 - **Pen controls**: Change pen size and color.
 - **Undo support**: Undo the most recent drawing action.
@@ -61,6 +62,12 @@ Manual `./target/release/screenshot` runs are only for debugging, not normal use
 `screenshot` writes PNG data to the X11 clipboard using `xclip` as the primary path. This lets CopyQ detect a normal clipboard ownership change and store the screenshot in history.
 
 If `xclip` is unavailable, the tool falls back to `copyq copy image/png -`.
+
+## Temporary files
+- Runtime temp files created by `screenshot`/`screenshot-daemon`: **0**.
+- Capture data is held in memory and passed over stdin pipes (daemon -> screenshot, screenshot -> xclip/copyq).
+- There is no temp-file cleanup step because no temp files are created.
+- The only on-disk image write is when you explicitly press Save, which writes a final PNG to `~/Pictures/Screenshots`.
 
 Dependencies for best clipboard behavior:
 ```bash
