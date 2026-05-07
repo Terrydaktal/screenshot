@@ -87,7 +87,7 @@ cargo build --release --bin screenshot-daemon
 ```
 
 ### Run as a service (starts automatically at boot/login)
-Use this for normal operation. This installs a systemd user service and enables it.
+Use this for normal operation. This installs a systemd user service and enables it under `default.target`, so it starts with the user manager when you log in. The daemon retries input-device discovery internally, so it does not need to wait for `graphical-session.target`.
 
 ```bash
 cd /home/lewis/Dev/screenshot

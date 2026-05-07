@@ -16,7 +16,13 @@ fn main() -> eframe::Result {
                 read_rgb_frame_from_stdin(stdin_width, stdin_height),
             )
         } else {
-            let mut capturer = captrs::Capturer::new(0).expect("Failed to create capturer");
+            let mut capturer = match captrs::Capturer::new(0) {
+                Ok(capturer) => capturer,
+                Err(err) => {
+                    eprintln!("ERROR: failed to create capturer: {err:?}");
+                    std::process::exit(1);
+                }
+            };
             let (width, height) = capturer.geometry();
 
             // Prefer a few short retries over a single long fallback delay.
@@ -1554,6 +1560,8 @@ impl ScreenshotApp {
         if let Ok(mut child) = Command::new("xclip")
             .args(&["-selection", "clipboard", "-t", "image/png"])
             .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
         {
             if let Some(mut stdin) = child.stdin.take() {
@@ -1570,6 +1578,8 @@ impl ScreenshotApp {
         if let Ok(mut child) = Command::new("copyq")
             .args(&["copy", "image/png", "-"])
             .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
         {
             if let Some(mut stdin) = child.stdin.take() {

@@ -17,16 +17,22 @@ const KEY_PRINTSCREEN_SYSRQ: u16 = 99;
 const KEY_SCROLL_LOCK: u16 = 70;
 const KEY_PAUSE: u16 = 119;
 const KEY_PRINTSCREEN: u16 = 210;
+const GUI_ENV_KEYS: &[&str] = &[
+    "DISPLAY",
+    "XAUTHORITY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+];
 
 fn main() {
     let screenshot_bin = resolve_screenshot_bin();
-    let env_vars: Vec<(String, String)> = env::vars().collect();
     let last_launch = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
     let active_listeners = Arc::new(Mutex::new(HashSet::<String>::new()));
     let mut warned_no_listeners = false;
 
     loop {
-        attach_input_listeners(&screenshot_bin, &env_vars, &last_launch, &active_listeners);
+        attach_input_listeners(&screenshot_bin, &last_launch, &active_listeners);
 
         let active_count = active_listeners.lock().unwrap().len();
         if active_count == 0 {
@@ -47,7 +53,6 @@ fn main() {
 
 fn attach_input_listeners(
     screenshot_bin: &str,
-    env_vars: &[(String, String)],
     last_launch: &Arc<Mutex<Instant>>,
     active_listeners: &Arc<Mutex<HashSet<String>>>,
 ) {
@@ -84,18 +89,11 @@ fn attach_input_listeners(
                 let name = device.name().unwrap_or_default().to_lowercase();
                 println!("READY: Listening on {} ({})", path, name);
                 let last_launch_clone = Arc::clone(last_launch);
-                let env_vars_clone = env_vars.to_vec();
                 let active_clone = Arc::clone(active_listeners);
                 let screenshot_bin_clone = screenshot_bin.to_string();
 
                 std::thread::spawn(move || {
-                    run_input_listener(
-                        path,
-                        screenshot_bin_clone,
-                        last_launch_clone,
-                        env_vars_clone,
-                        active_clone,
-                    );
+                    run_input_listener(path, screenshot_bin_clone, last_launch_clone, active_clone);
                 });
             }
             Err(err) => {
@@ -110,7 +108,6 @@ fn run_input_listener(
     path: String,
     screenshot_bin: String,
     last_launch: Arc<Mutex<Instant>>,
-    env_vars: Vec<(String, String)>,
     active_listeners: Arc<Mutex<HashSet<String>>>,
 ) {
     let result: Result<(), String> = (|| {
@@ -146,6 +143,9 @@ fn run_input_listener(
                 if !should_launch {
                     continue;
                 }
+
+                refresh_gui_environment();
+                let env_vars = env::vars().collect::<Vec<_>>();
 
                 match capture_rgb_frame_fast() {
                     Ok((width, height, rgb_pixels)) => {
@@ -239,7 +239,7 @@ fn spawn_prefetched(
         .arg(height.to_string());
     configure_child_env(&mut cmd, env_vars);
     cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::inherit());
+    cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::inherit());
 
     let mut child = cmd.spawn()?;
@@ -253,7 +253,7 @@ fn spawn_prefetched(
 fn spawn_plain(screenshot_bin: &str, env_vars: &[(String, String)]) -> std::io::Result<()> {
     let mut cmd = Command::new(screenshot_bin);
     configure_child_env(&mut cmd, env_vars);
-    cmd.stdout(Stdio::inherit());
+    cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::inherit());
     let _ = cmd.spawn()?;
     Ok(())
@@ -269,6 +269,34 @@ fn configure_child_env(cmd: &mut Command, env_vars: &[(String, String)]) {
     }
     if env::var_os("RUST_LIB_BACKTRACE").is_none() {
         cmd.env("RUST_LIB_BACKTRACE", "full");
+    }
+}
+
+fn refresh_gui_environment() {
+    let Ok(output) = Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    else {
+        eprintln!("WARN: failed to query user systemd environment");
+        return;
+    };
+
+    if !output.status.success() {
+        eprintln!(
+            "WARN: systemctl --user show-environment failed with status {}",
+            output.status
+        );
+        return;
+    }
+
+    let env_text = String::from_utf8_lossy(&output.stdout);
+    for line in env_text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if GUI_ENV_KEYS.contains(&key) {
+            env::set_var(key, value);
+        }
     }
 }
 
