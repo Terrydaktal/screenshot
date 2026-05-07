@@ -15,13 +15,14 @@ const DEVICE_SCAN_INTERVAL_MS: u64 = 1500;
 const INPUT_DIR: &str = "/dev/input";
 
 fn main() {
+    let screenshot_bin = resolve_screenshot_bin();
     let env_vars: Vec<(String, String)> = env::vars().collect();
     let last_launch = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
     let active_listeners = Arc::new(Mutex::new(HashSet::<String>::new()));
     let mut warned_no_listeners = false;
 
     loop {
-        attach_input_listeners(&env_vars, &last_launch, &active_listeners);
+        attach_input_listeners(&screenshot_bin, &env_vars, &last_launch, &active_listeners);
 
         let active_count = active_listeners.lock().unwrap().len();
         if active_count == 0 {
@@ -41,6 +42,7 @@ fn main() {
 }
 
 fn attach_input_listeners(
+    screenshot_bin: &str,
     env_vars: &[(String, String)],
     last_launch: &Arc<Mutex<Instant>>,
     active_listeners: &Arc<Mutex<HashSet<String>>>,
@@ -80,9 +82,16 @@ fn attach_input_listeners(
                 let last_launch_clone = Arc::clone(last_launch);
                 let env_vars_clone = env_vars.to_vec();
                 let active_clone = Arc::clone(active_listeners);
+                let screenshot_bin_clone = screenshot_bin.to_string();
 
                 std::thread::spawn(move || {
-                    run_input_listener(path, last_launch_clone, env_vars_clone, active_clone);
+                    run_input_listener(
+                        path,
+                        screenshot_bin_clone,
+                        last_launch_clone,
+                        env_vars_clone,
+                        active_clone,
+                    );
                 });
             }
             Err(err) => {
@@ -95,6 +104,7 @@ fn attach_input_listeners(
 
 fn run_input_listener(
     path: String,
+    screenshot_bin: String,
     last_launch: Arc<Mutex<Instant>>,
     env_vars: Vec<(String, String)>,
     active_listeners: Arc<Mutex<HashSet<String>>>,
@@ -131,7 +141,13 @@ fn run_input_listener(
 
                 match capture_rgb_frame_fast() {
                     Ok((width, height, rgb_pixels)) => {
-                        match spawn_prefetched(&env_vars, width, height, &rgb_pixels) {
+                        match spawn_prefetched(
+                            &screenshot_bin,
+                            &env_vars,
+                            width,
+                            height,
+                            &rgb_pixels,
+                        ) {
                             Ok(()) => continue,
                             Err(err) => {
                                 eprintln!(
@@ -145,7 +161,7 @@ fn run_input_listener(
                     }
                 }
 
-                if let Err(err) = spawn_plain(&env_vars) {
+                if let Err(err) = spawn_plain(&screenshot_bin, &env_vars) {
                     eprintln!("ERROR: plain screenshot launch failed: {err}");
                 }
             }
@@ -194,12 +210,13 @@ fn capture_frame_with_retries(capturer: &mut Capturer) -> Result<Vec<Bgr8>, Capt
 }
 
 fn spawn_prefetched(
+    screenshot_bin: &str,
     env_vars: &[(String, String)],
     width: usize,
     height: usize,
     rgb_pixels: &[u8],
 ) -> std::io::Result<()> {
-    let mut cmd = Command::new(SCREENSHOT_BIN);
+    let mut cmd = Command::new(screenshot_bin);
     cmd.arg("--stdin-rgb")
         .arg(width.to_string())
         .arg(height.to_string());
@@ -216,8 +233,8 @@ fn spawn_prefetched(
     Ok(())
 }
 
-fn spawn_plain(env_vars: &[(String, String)]) -> std::io::Result<()> {
-    let mut cmd = Command::new(SCREENSHOT_BIN);
+fn spawn_plain(screenshot_bin: &str, env_vars: &[(String, String)]) -> std::io::Result<()> {
+    let mut cmd = Command::new(screenshot_bin);
     configure_child_env(&mut cmd, env_vars);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
@@ -236,4 +253,30 @@ fn configure_child_env(cmd: &mut Command, env_vars: &[(String, String)]) {
     if env::var_os("RUST_LIB_BACKTRACE").is_none() {
         cmd.env("RUST_LIB_BACKTRACE", "full");
     }
+}
+
+fn resolve_screenshot_bin() -> String {
+    let fallback = SCREENSHOT_BIN.to_string();
+    let Ok(exe_path) = env::current_exe() else {
+        eprintln!("WARN: failed to resolve daemon executable path; using fallback screenshot path");
+        return fallback;
+    };
+
+    let Some(exe_dir) = exe_path.parent() else {
+        eprintln!(
+            "WARN: daemon executable has no parent directory; using fallback screenshot path"
+        );
+        return fallback;
+    };
+
+    let candidate = exe_dir.join("screenshot");
+    if !candidate.exists() {
+        eprintln!(
+            "WARN: screenshot binary not found at {}; using fallback path",
+            candidate.display()
+        );
+        return fallback;
+    }
+
+    candidate.to_string_lossy().to_string()
 }
