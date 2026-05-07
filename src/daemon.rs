@@ -1,5 +1,5 @@
 use captrs::{Bgr8, CaptureError, Capturer};
-use evdev::{Device, EventType};
+use evdev::{Device, EventType, KeyCode};
 use std::collections::HashSet;
 use std::env;
 use std::io::Write;
@@ -13,6 +13,10 @@ const CAPTURE_RETRIES: usize = 6;
 const CAPTURE_RETRY_SLEEP_MS: u64 = 2;
 const DEVICE_SCAN_INTERVAL_MS: u64 = 1500;
 const INPUT_DIR: &str = "/dev/input";
+const KEY_PRINTSCREEN_SYSRQ: u16 = 99;
+const KEY_SCROLL_LOCK: u16 = 70;
+const KEY_PAUSE: u16 = 119;
+const KEY_PRINTSCREEN: u16 = 210;
 
 fn main() {
     let screenshot_bin = resolve_screenshot_bin();
@@ -72,12 +76,12 @@ fn attach_input_listeners(
 
         match Device::open(&path) {
             Ok(device) => {
-                let name = device.name().unwrap_or_default().to_lowercase();
-                if !(name.contains("keyboard") || name.contains("strafe")) {
+                if !supports_trigger_key(&device) {
                     active_listeners.lock().unwrap().remove(&path);
                     continue;
                 }
 
+                let name = device.name().unwrap_or_default().to_lowercase();
                 println!("READY: Listening on {} ({})", path, name);
                 let last_launch_clone = Arc::clone(last_launch);
                 let env_vars_clone = env_vars.to_vec();
@@ -121,8 +125,12 @@ fn run_input_listener(
                 }
 
                 let code = event.code();
-                // Support PrintScreen (99), ScrollLock (70), or Pause (119)
-                if code != 99 && code != 70 && code != 119 {
+                // Support common PrintScreen codes plus fallback keys.
+                if code != KEY_PRINTSCREEN_SYSRQ
+                    && code != KEY_PRINTSCREEN
+                    && code != KEY_SCROLL_LOCK
+                    && code != KEY_PAUSE
+                {
                     continue;
                 }
 
@@ -173,6 +181,15 @@ fn run_input_listener(
     }
 
     active_listeners.lock().unwrap().remove(&path);
+}
+
+fn supports_trigger_key(device: &Device) -> bool {
+    device.supported_keys().is_some_and(|keys| {
+        keys.contains(KeyCode::new(KEY_PRINTSCREEN_SYSRQ))
+            || keys.contains(KeyCode::new(KEY_PRINTSCREEN))
+            || keys.contains(KeyCode::new(KEY_SCROLL_LOCK))
+            || keys.contains(KeyCode::new(KEY_PAUSE))
+    })
 }
 
 fn capture_rgb_frame_fast() -> Result<(usize, usize, Vec<u8>), String> {
