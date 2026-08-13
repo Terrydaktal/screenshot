@@ -7,7 +7,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const SCREENSHOT_BIN: &str = "/home/lewis/Dev/screenshot/target/release/screenshot";
 const LAUNCH_COOLDOWN_MS: u64 = 1000;
 const CAPTURE_RETRIES: usize = 6;
 const CAPTURE_RETRY_SLEEP_MS: u64 = 2;
@@ -301,7 +300,7 @@ fn refresh_gui_environment() {
 }
 
 fn resolve_screenshot_bin() -> String {
-    let fallback = SCREENSHOT_BIN.to_string();
+    let fallback = "screenshot".to_string();
     let Ok(exe_path) = env::current_exe() else {
         eprintln!("WARN: failed to resolve daemon executable path; using fallback screenshot path");
         return fallback;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=screenshot daemon
+Comment=Capture-first daemon for screenshot
+Exec=__PROJECT_ROOT__/target/release/screenshot-daemon
+Icon=accessories-screenshot-tool
+NoDisplay=true
+Terminal=false
+Categories=Graphics;
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

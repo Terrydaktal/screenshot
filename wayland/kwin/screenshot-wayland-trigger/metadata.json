@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "9lewis9@gmail.com",
+                "Name": "Terrydaktal"
+            }
+        ],
+        "Description": "Capture the Plasma workspace before opening the screenshot overlay",
+        "Id": "screenshot-wayland-trigger",
+        "License": "MIT",
+        "Name": "screenshot Wayland Trigger",
+        "Version": "0.1.8"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js"
+}

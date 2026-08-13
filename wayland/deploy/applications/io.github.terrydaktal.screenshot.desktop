@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=screenshot
+Comment=Capture and annotate the Plasma workspace
+Exec=__PROJECT_ROOT__/target/release/screenshot
+Icon=accessories-screenshot-tool
+NoDisplay=true
+Terminal=false
+Categories=Graphics;
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
